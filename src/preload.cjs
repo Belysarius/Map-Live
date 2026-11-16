@@ -7,4 +7,7 @@ contextBridge.exposeInMainWorld('mapLive', {
   selectView(view) {
     ipcRenderer.send('map-view', view);
   },
+  drag(action, dx, dy) {
+    ipcRenderer.send('map-drag', action, dx, dy);
+  },
 });

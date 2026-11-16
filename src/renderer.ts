@@ -3,6 +3,7 @@ import { setupFrom } from '../vendor/lot-map/hooks/setup';
 import type { Board, Entry } from '../vendor/lot-map/types';
 
 type View = 'tab' | 'compact' | 'fullscreen';
+type DragAction = 'start' | 'move' | 'end';
 
 type Activity = {
   mode: 'live' | 'demo';
@@ -19,6 +20,7 @@ declare global {
     mapLive: {
       onActivity(callback: (activity: Activity) => void): void;
       selectView(view: View): void;
+      drag(action: DragAction, dx?: number, dy?: number): void;
     };
   }
 }
@@ -44,6 +46,7 @@ function element(id: string): HTMLElement {
 
 const hud = element('hud');
 const edgeTab = element('edge-tab');
+const compactDragHandle = element('compact-drag-handle');
 const minimize = element('minimize');
 const resize = element('resize');
 const map = element('map');
@@ -101,7 +104,7 @@ function render(activity: Activity) {
   resize.setAttribute('aria-label', resize.title);
 
   setup.motion = motion.matches ? 'reduced' : 'full';
-  map.innerHTML = drawMap(activity.board, Date.now(), setup);
+  map.innerHTML = drawMap(activity.board, Date.now(), setup, activity.active);
   status.textContent = activity.active ? 'Working' : activity.outcome;
   signal.dataset.active = String(activity.active);
   signal.dataset.outcome = activity.outcome;
@@ -116,8 +119,57 @@ function render(activity: Activity) {
   updateClock();
 }
 
+function enableDrag(handle: HTMLElement, view: 'tab' | 'compact', onClick?: () => void) {
+  let gesture: { id: number; x: number; y: number; moved: boolean } | undefined;
+  let suppressClick = false;
+
+  handle.addEventListener('pointerdown', event => {
+    if (current?.view !== view || event.button !== 0 || !event.isPrimary) return;
+    suppressClick = false;
+    gesture = { id: event.pointerId, x: event.screenX, y: event.screenY, moved: false };
+    if (view === 'compact') handle.setPointerCapture(event.pointerId);
+    window.mapLive.drag('start');
+  });
+
+  function move(event: PointerEvent) {
+    if (!gesture || gesture.id !== event.pointerId || current?.view !== view) return;
+    if (event.type === 'pointermove' && event.buttons === 0) {
+      end(event);
+      return;
+    }
+    const dx = event.screenX - gesture.x;
+    const dy = event.screenY - gesture.y;
+    if (!gesture.moved) {
+      if (Math.hypot(dx, dy) < 4) return;
+      gesture.moved = true;
+      suppressClick = true;
+      if (view === 'tab' && event.type === 'pointermove') handle.setPointerCapture(event.pointerId);
+      handle.classList.add('dragging');
+    }
+    window.mapLive.drag('move', dx, dy);
+  }
+
+  function end(event: PointerEvent) {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    if (event.type === 'pointerup') move(event);
+    gesture = undefined;
+    handle.classList.remove('dragging');
+    window.mapLive.drag('end');
+  }
+
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+  handle.addEventListener('lostpointercapture', end);
+  if (onClick) handle.addEventListener('click', event => {
+    if (!suppressClick || event.detail === 0) onClick();
+    suppressClick = false;
+  });
+}
+
 motion.addEventListener('change', () => { if (current && !hud.hidden) render(current); });
-edgeTab.addEventListener('click', () => window.mapLive.selectView('compact'));
+enableDrag(edgeTab, 'tab', () => window.mapLive.selectView('compact'));
+enableDrag(compactDragHandle, 'compact');
 minimize.addEventListener('click', () => window.mapLive.selectView('tab'));
 resize.addEventListener('click', () => window.mapLive.selectView(current?.view === 'fullscreen' ? 'compact' : 'fullscreen'));
 window.mapLive.onActivity(render);

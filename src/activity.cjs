@@ -100,7 +100,7 @@ function applyTurnRecord(session, record, at) {
     return true;
   }
   if (record.type === 'token_usage_record') {
-    add(session, 'model', 'Model response', at);
+    add(session, 'model', 'Model response', at, { from: 'inbound' });
     return true;
   }
   if (record.type === 'event_msg' && p.type === 'token_count') {
@@ -124,7 +124,7 @@ function applyTurnRecord(session, record, at) {
     // "completed" on a function call describes generation of its arguments.
     // The tool itself is running until its matching output is written.
     const status = p.status === 'failed' ? 'err' : p.type === 'web_search_call' && p.status === 'completed' ? 'ok' : 'run';
-    const entry = add(session, station, label, at, { id, status });
+    const entry = add(session, station, label, at, { id, status, endedAt: status === 'run' ? undefined : at });
     if (status === 'run') session.calls.set(id, entry);
     return true;
   }

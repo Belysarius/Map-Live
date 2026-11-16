@@ -27,11 +27,13 @@ body { margin: 0; overflow: hidden; user-select: none; }
   color: #e5f9ff;
   font: 650 12px "Segoe UI", sans-serif;
   cursor: pointer;
+  touch-action: none;
 }
 .edge-tab img { width: 22px; height: 22px; }
 .edge-tab i { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: #77e5ff87; }
 .edge-tab[data-active="true"] i { background: var(--gold); box-shadow: 0 0 7px var(--gold); }
 .edge-tab:hover, .edge-tab:focus-visible { background: linear-gradient(110deg, #1b4b69, #0c2a41); }
+.edge-tab.dragging { cursor: grabbing; background: linear-gradient(110deg, #225373, #14334d); }
 
 .hud {
   position: absolute;
@@ -73,7 +75,9 @@ body { margin: 0; overflow: hidden; user-select: none; }
   border-bottom: 1px solid #81d2ff2e;
   background: linear-gradient(90deg, #7bd7ff0c, transparent);
 }
-.brand { gap: 9px; }
+.brand { align-self: stretch; flex: 1; gap: 9px; }
+.hud:not(.fullscreen) .brand { cursor: grab; touch-action: none; }
+.hud:not(.fullscreen) .brand.dragging { cursor: grabbing; }
 .header-controls { gap: 6px; }
 .header-controls .signal { margin-right: 4px; }
 .view-button {
@@ -89,7 +93,7 @@ body { margin: 0; overflow: hidden; user-select: none; }
   cursor: pointer;
 }
 .view-button:hover, .view-button:focus-visible { background: #58caff32; color: #fff; }
-.view-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.view-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .view-button .restore-icon, .fullscreen .view-button .expand-icon { display: none; }
 .fullscreen .view-button .restore-icon { display: inline; }
 .brand img { width: 28px; height: 28px; filter: drop-shadow(0 0 6px #3dbcff82); }
@@ -102,13 +106,13 @@ h2 { margin: 0; font-size: 13px; font-weight: 650; color: #d5f5ff; }
 }
 .signal {
   gap: 7px;
-  color: var(--gold);
+  color: var(--cyan);
   text-transform: uppercase;
   letter-spacing: .13em;
 }
 .signal i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.signal[data-active="true"] { color: var(--gold); }
 .signal[data-active="true"] i { animation: heartbeat 1.85s ease-in-out infinite; }
-.signal[data-outcome="Complete"] { color: var(--cyan); }
 .signal[data-outcome="Failed"], .signal[data-outcome="Interrupted"] { color: #ff9eab; }
 @keyframes heartbeat { 50% { opacity: .55; } }
 
@@ -131,18 +135,6 @@ h2 { margin: 0; font-size: 13px; font-weight: 650; color: #d5f5ff; }
   background-position: center;
   mask-image: radial-gradient(ellipse, #000b, transparent 75%);
 }
-.radar-sweep {
-  position: absolute;
-  z-index: -1;
-  width: min(86%, 350px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  opacity: .65;
-  background: conic-gradient(from 0deg, transparent 0 83%, #43c7ff25 98.8%, #81e7ff5e 99.5%, transparent);
-  mask-image: radial-gradient(circle, transparent 17%, #000 29%, #000 65%, transparent 73%);
-  animation: sweep 17s linear infinite;
-}
-@keyframes sweep { to { transform: rotate(360deg); } }
 .map { width: 100%; height: 100%; min-height: 0; padding: 4px 7px; }
 .map svg { display: block; width: 100%; height: 100%; overflow: visible; }
 
@@ -194,7 +186,6 @@ h2 { margin: 0; font-size: 13px; font-weight: 650; color: #d5f5ff; }
 .fullscreen .header, .fullscreen .footer { grid-column: 1 / -1; height: 100%; padding-inline: 24px; }
 .fullscreen .radar { min-width: 0; }
 .fullscreen .radar-grid { background-size: 32px 32px; }
-.fullscreen .radar-sweep { width: min(85%, 77vh); }
 .fullscreen .map { max-width: 960px; padding: 12px; }
 .fullscreen .activity {
   align-self: stretch;

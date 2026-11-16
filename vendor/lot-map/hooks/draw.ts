@@ -25,7 +25,7 @@ const FONT = 'font-family="SF Mono, ui-monospace, Menlo, monospace"'
 
 // The braille map keeps these times too, so that the two drawings of one board light and fade together.
 export const PULSE_MS = 800
-const RIPPLE_MS = 450
+const PULSE_TAIL_MS = 90
 export const GLOW_MS = 3200
 export const ALARM_MS = 6000
 export const SWITCH_MS = 8000
@@ -79,21 +79,65 @@ function pulse(a: Point, b: Point, color: string, age: number, radius: number, i
   return out
 }
 
-/** A ring that spreads from where a pulse lands, at the moment it lands. */
-function ripple(p: Point, r: number, color: string, age: number): string {
-  const timing = `begin="${clock(PULSE_MS - age)}" dur="${clock(RIPPLE_MS)}" fill="freeze"`
+function faultSpoke(a: Point, b: Point, color: string, age: number): string {
   return (
-    `<circle cx="${n1(p.x)}" cy="${n1(p.y)}" r="${r}" fill="none" stroke="${color}" stroke-width="1.2" opacity="0">` +
-    `<animate attributeName="r" values="${r};${r + 11}" ${timing}/>` +
-    `<animate attributeName="opacity" values=".7;0" ${timing}/></circle>`
+    `<line x1="${n1(a.x)}" y1="${n1(a.y)}" x2="${n1(b.x)}" y2="${n1(b.y)}" stroke="${color}" stroke-width="1.4" stroke-dasharray="3 4" opacity="0">` +
+    `<animate attributeName="opacity" values=".75;0" begin="${clock(-age)}" dur="${clock(GLOW_MS / 2)}" fill="freeze"/></line>`
   )
 }
 
-function beam(a: Point, b: Point, color: string, age: number, isDashed: boolean): string {
-  return (
-    `<line x1="${n1(a.x)}" y1="${n1(a.y)}" x2="${n1(b.x)}" y2="${n1(b.y)}" stroke="${color}" stroke-width="1.4"${isDashed ? ' stroke-dasharray="3 4"' : ''} opacity="0">` +
-    `<animate attributeName="opacity" values=".75;0" begin="${clock(-age)}" dur="${clock(GLOW_MS / 2)}" fill="freeze"/></line>`
-  )
+function loop(now: number, period: number): string {
+  return `begin="${clock(-(now % period))}" dur="${clock(period)}" repeatCount="indefinite"`
+}
+
+// Taper the wave toward both ends so it stays attached to the core and station.
+function wavePath(a: Point, b: Point, phase: number): string {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const length = Math.hypot(dx, dy) || 1
+  const points = Array.from({ length: 13 }, (_, i) => {
+    const t = i / 12
+    const offset = 9 * Math.sin(Math.PI * t) * Math.sin(Math.PI * 2 * (2 * t - phase))
+    return { x: a.x + dx * t - dy / length * offset, y: a.y + dy * t + dx / length * offset }
+  })
+  const xy = (p: Point) => `${n1(p.x)} ${n1(p.y)}`
+  let path = `M${xy(a)}`
+  for (let i = 1; i < points.length - 2; i++) {
+    const point = points[i]
+    const next = points[i + 1]
+    path += `Q${xy(point)} ${xy({ x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 })}`
+  }
+  return path + `Q${xy(points[points.length - 2])} ${xy(b)}`
+}
+
+function signalWave(a: Point, b: Point, now: number, c: Palette, isStill: boolean): string {
+  const phases = [0, .25, .5, .75, 1].map(phase => wavePath(a, b, phase))
+  const morph = isStill ? '' :
+    `<animate attributeName="d" values="${phases.join(';')}" ${loop(now, 1250)}/>`
+  const path = `d="${phases[0]}" fill="none" stroke-linecap="round"`
+  return '<g>' +
+    `<path ${path} stroke="${c.hot}" opacity=".16" stroke-width="7">${morph}</path>` +
+    `<path ${path} stroke="${c.hot}" stroke-width="2">${morph}</path>` +
+    (isStill ? '' : `<path ${path} stroke="${c.bone}" stroke-width="2.8" pathLength="100" stroke-dasharray="2 18">${morph}` +
+      `<animate attributeName="stroke-dashoffset" values="0;-40" ${loop(now, 1000)}/></path>`) +
+    '</g>'
+}
+
+function runningOutline(p: Point, count: number, color: string, now: number, isStill: boolean): string {
+  // The outline grows with concurrent calls. The badge gives the exact count above four.
+  const segments = Math.min(count, 4)
+  const radius = NODE + 5 + (segments - 1) * 1.6
+  const corners = 4 + 2 * segments
+  const points = Array.from({ length: corners }, (_, i) => {
+    const angle = i * Math.PI * 2 / corners
+    return `${n1(Math.cos(angle) * radius)},${n1(Math.sin(angle) * radius)}`
+  }).join(' ')
+  const arc = 100 / segments
+  const motion = isStill ? '' :
+    `<animate attributeName="stroke-dashoffset" values="0;-${arc}" ${loop(now, 2400)}/>`
+  return `<g transform="translate(${n1(p.x)} ${n1(p.y)})">` +
+    `<polygon points="${points}" fill="none" stroke="${color}" stroke-width="1.25" stroke-linejoin="round" opacity=".72"/>` +
+    `<circle r="${radius + 3}" fill="none" stroke="${color}" stroke-width="1.2" pathLength="100" stroke-dasharray="${arc * .36} ${arc * .64}" opacity=".75">${motion}</circle></g>`
 }
 
 /** How far from the core a leg bends, by how many stations apart its ends are: far enough in to clear the labels under the nodes, far enough out to clear the core. */
@@ -167,7 +211,7 @@ function station(s: (typeof STATIONS)[number], i: number, { entries, board, now,
   const isAlarm = alarmAge < ALARM_MS
   const isLit = running.length > 0 || since < GLOW_MS
   const [main, hot] = s.id === 'memory' ? [c.mem, c.memHot] : [c.accent, c.hot]
-  const color = isAlarm ? c.red : main
+  const color = isAlarm ? c.red : running.length > 0 ? c.hot : main
   const fade = isAlarm ? alarmAge : since
   const span = isAlarm ? ALARM_MS : GLOW_MS
 
@@ -180,20 +224,7 @@ function station(s: (typeof STATIONS)[number], i: number, { entries, board, now,
           `<animate attributeName="opacity" values=".3;0" begin="${clock(-fade)}" dur="${clock(span)}" fill="freeze"/></circle>`
   }
   if (running.length > 0) {
-    const elapsed = now - Math.min(...running.map(e => e.startedAt))
-    const beat = `begin="${clock(-(elapsed % 1400))}" dur="1.4s" repeatCount="indefinite"`
-    // The beat is a ring that spreads: with reduced motion the steady halo and the clock hands say the same.
-    if (!isStill) {
-      under +=
-        `<circle cx="${x}" cy="${y}" r="${NODE}" fill="none" stroke="${color}" stroke-width="1.3">` +
-        `<animate attributeName="r" values="${NODE};${NODE + 15}" ${beat}/>` +
-        `<animate attributeName="opacity" values=".9;0" ${beat}/></circle>`
-    }
-    // Two hands of a clock around the node: the inner one goes round in a minute, the outer one in ten.
-    const hand = (r: number, width: number, lapMs: number, isOnce: boolean): string =>
-      `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${hot}" stroke-width="${width}" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="1" transform="rotate(-90 ${x} ${y})">` +
-      `<animate attributeName="stroke-dashoffset" values="1;0" begin="${clock(-(isOnce ? Math.min(elapsed, lapMs) : elapsed % lapMs))}" dur="${clock(lapMs)}" ${isOnce ? 'fill="freeze"' : 'repeatCount="indefinite"'}/></circle>`
-    under += hand(NODE + 4, 2.2, 60_000, false) + hand(NODE + 8, 1.2, 600_000, true)
+    under += runningOutline(p, running.length, c.hot, now, isStill)
   }
 
   // A lit node wears a ring of its color while something runs; afterwards the ring fades back to the resting line.
@@ -204,7 +235,7 @@ function station(s: (typeof STATIONS)[number], i: number, { entries, board, now,
       : isLit || isAlarm
         ? `${lit} opacity="0"><animate attributeName="opacity" values="1;0" begin="${clock(-fade)}" dur="${clock(span)}" fill="freeze"/></circle>`
         : ''
-  const glyphColor = isAlarm ? c.red : isLit ? hot : s.id === 'memory' && count > 0 ? main : c.ash
+  const glyphColor = isAlarm ? c.red : running.length > 0 ? hot : isLit ? main : s.id === 'memory' && count > 0 ? main : c.ash
   // The words stand on a rim of the ground's own color, so a line that passes behind them never strikes them through.
   const rim = `paint-order="stroke" stroke="${c.ground}" stroke-width="3.5" stroke-linejoin="round"`
   let over =
@@ -238,22 +269,22 @@ function station(s: (typeof STATIONS)[number], i: number, { entries, board, now,
 }
 
 
-export function drawMap(board: Board, now: number, setup: Setup): string {
+export function drawMap(board: Board, now: number, setup: Setup, turnActive = false): string {
   const c: Palette = { ...(setup.theme === 'light' ? LIGHT : DARK), ...setup.colors }
   // How many places the ring is turned. The stations keep their order, so the far side of the person is always the network.
   const shift = setup.layout === 'you-bottom' ? STATIONS.length / 2 : 0
   const core: Point = { x: CX, y: CY }
-  const recent = board.entries.slice(-40)
+  const recent = board.entries.filter((entry, index) => entry.status === 'run' || index >= board.entries.length - 40)
+  const runningStations = new Set(recent.filter(e => e.status === 'run').map(e => e.station))
   // With reduced motion nothing flies, spreads or spins. A call still shows: its spoke flashes and fades, its station
   // lights and cools, the route gets its leg; those only change their opacity. The clock hands stay, as slow as a clock's.
   const isStill = setup.motion === 'reduced'
-  const flights = isStill ? [] : recent.filter(e => now - e.startedAt < PULSE_MS + RIPPLE_MS).slice(-14)
-  const returns = isStill ? [] : recent.filter(e => e.endedAt !== undefined && e.from !== 'inbound' && now - e.endedAt < PULSE_MS + RIPPLE_MS).slice(-14)
-  const beams = recent.filter(e => now - e.startedAt < GLOW_MS / 2).slice(-10)
-  const anyRunning = recent.some(e => e.status === 'run')
+  const inbound = isStill ? [] : recent.filter(e => e.from === 'inbound' && now - e.startedAt < PULSE_MS + PULSE_TAIL_MS).slice(-14)
+  const returns = isStill ? [] : recent.filter(e => e.endedAt !== undefined && e.from !== 'inbound' && now - e.endedAt < PULSE_MS + PULSE_TAIL_MS).slice(-14)
+  const active = turnActive || runningStations.size > 0
   const agentsAt = place(indexOf('agents'), shift)
   const isBad = (e: Entry): boolean => e.status === 'block' || e.status === 'err'
-  const tone = (e: Entry): [string, string] => (e.station === 'memory' ? [c.mem, c.memHot] : [c.accent, c.hot])
+  const failures = recent.filter(e => isBad(e) && now - (e.endedAt ?? e.startedAt) < GLOW_MS / 2).slice(-10)
 
   // Without its ground the map keeps the rim around its words, in the ground's color: a faint halo on a surface of another shade.
   let body = setup.background === 'transparent' ? '' : `<rect width="${W}" height="${H}" rx="12" fill="${c.ground}"/>`
@@ -266,6 +297,7 @@ export function drawMap(board: Board, now: number, setup: Setup): string {
   // Spokes first, then whatever flies along them, then the nodes on top.
   // A spoke wears in with use: by the end of a session the map shows where the work went.
   STATIONS.forEach((s, i) => {
+    if (runningStations.has(s.id)) return
     const p = place(i, shift)
     const a = edge(core, p, HUB)
     const b = edge(p, core, NODE)
@@ -279,6 +311,10 @@ export function drawMap(board: Board, now: number, setup: Setup): string {
   const drawn = STATIONS.map((s, i) => station(s, i, scene))
   body += drawn.map(d => d.under).join('')
   body += trail(recent, now, c, isStill, shift)
+  for (const stationId of runningStations) {
+    const target = place(indexOf(stationId), shift)
+    body += signalWave(edge(core, target, HUB), edge(target, core, NODE), now, c, isStill)
+  }
 
   /** The two ends of an entry's spoke: where it starts (the core or the agents station) and its own station. */
   const ends = (e: Entry): [Point, Point] => {
@@ -292,23 +328,19 @@ export function drawMap(board: Board, now: number, setup: Setup): string {
     return (peers.indexOf(e) - (peers.length - 1) / 2) * 5
   }
 
-  for (const e of beams) {
+  for (const e of failures) {
     const [a, b] = ends(e)
-    body += beam(a, b, isBad(e) ? c.red : tone(e)[0], now - e.startedAt, e.from === 'inbound')
+    body += faultSpoke(a, b, c.red, now - (e.endedAt ?? e.startedAt))
   }
-  for (const e of flights) {
-    const [a, b] = aside(...ends(e), lane(flights, e))
+  for (const e of inbound) {
+    const [a, b] = aside(...ends(e), lane(inbound, e))
     const age = now - e.startedAt
-    const color = e.status === 'block' ? c.red : tone(e)[1]
-    if (e.from === 'inbound') {
-      body += pulse(b, a, color, age, 3.8, true) + ripple(core, HUB - 2, color, age)
-    } else {
-      body += pulse(a, b, color, age, 3.8) + ripple(place(indexOf(e.station), shift), NODE, color, age)
-    }
+    body += pulse(b, a, c.accent, age, 3.4, e.station === 'you')
   }
   for (const e of returns) {
     const [a, b] = aside(...ends(e), lane(returns, e))
-    body += pulse(b, a, e.status === 'ok' ? c.ash : c.red, now - (e.endedAt as number), 2.6)
+    const age = now - (e.endedAt as number)
+    body += pulse(b, a, isBad(e) ? c.red : c.accent, age, 3.4)
   }
 
   body += drawn.map(d => d.over).join('')
@@ -331,16 +363,14 @@ export function drawMap(board: Board, now: number, setup: Setup): string {
   // A name longer than three letters shrinks to stay inside the circle.
   const coreSize = Math.min(17, 62 / (0.75 * setup.core.length))
 
-  // The core breathes at rest and quickens while something runs.
-  const period = anyRunning ? 1600 : 4800
-  const breath = `begin="${clock(-(now % period))}" dur="${clock(period)}" repeatCount="indefinite"`
-  body +=
-    (isStill
-      ? `<circle cx="${CX}" cy="${CY}" r="${CORE + 8}" fill="${c.accent}" opacity="${anyRunning ? '.16' : '.08'}"/>`
-      : `<circle cx="${CX}" cy="${CY}" r="${CORE + 6}" fill="${c.accent}" opacity=".08">` +
-        `<animate attributeName="r" values="${CORE + 3};${CORE + 13};${CORE + 3}" ${breath}/>` +
-        `<animate attributeName="opacity" values=".05;${anyRunning ? '.24' : '.12'};.05" ${breath}/></circle>`) +
-    `<circle cx="${CX}" cy="${CY}" r="${CORE}" fill="${c.raised}" stroke="${anyRunning ? c.accent : c.line}" stroke-width="1.3"/>`
+  // A turn can be active even when no station has a tool call in flight.
+  if (active) {
+    const breathing = isStill ? '' :
+      `<animate attributeName="r" values="${CORE + 6};${CORE + 12};${CORE + 6}" ${loop(now, 2000)}/>` +
+      `<animate attributeName="opacity" values=".09;.24;.09" ${loop(now, 2000)}/>`
+    body += `<circle cx="${CX}" cy="${CY}" r="${CORE + 8}" fill="${c.accent}" opacity=".16">${breathing}</circle>`
+  }
+  body += `<circle cx="${CX}" cy="${CY}" r="${CORE}" fill="${c.raised}" stroke="${active ? c.accent : c.line}" stroke-width="1.3"/>`
 
   // The context window as a ring around the core: it fills as the session goes and empties at a compaction.
   if (board.context !== undefined) {

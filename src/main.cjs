@@ -19,6 +19,7 @@ const launchRequest = {
   demo: process.argv.includes('--demo'),
 };
 const pendingRequests = [];
+const positions = {};
 let selectedView = launchRequest.fullscreen ? 'fullscreen' : launchRequest.cycle ? 'compact' : undefined;
 let shownView;
 let demoStart = launchRequest.demo ? Date.now() - 9_900 : 0;
@@ -33,36 +34,60 @@ let lastPayload;
 let lastError;
 let timer;
 let captureStarted = false;
+let drag;
 
 app.setName('Map Live');
 
-function placeWindow() {
-  const display = window.isVisible()
-    ? screen.getDisplayMatching(window.getBounds())
-    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  if (shownView === 'fullscreen') {
-    window.setBounds(display.bounds);
-    return;
-  }
+function boundsFor(view, display, position) {
+  if (view === 'fullscreen') return display.bounds;
   const { workArea } = display;
-  if (shownView === 'tab') {
-    window.setBounds({
-      x: workArea.x + workArea.width - tabWidth,
-      y: workArea.y + 26,
-      width: tabWidth,
-      height: tabHeight,
-    });
-    return;
-  }
+  const tab = view === 'tab';
   const inset = 16;
-  const w = Math.min(width, workArea.width - 2 * inset);
-  const h = Math.min(height, workArea.height - 2 * inset);
-  window.setBounds({
-    x: workArea.x + workArea.width - w - inset,
-    y: workArea.y + inset,
+  const w = Math.min(tab ? tabWidth : width, workArea.width);
+  const h = Math.min(tab ? tabHeight : height, workArea.height);
+  const right = workArea.x + workArea.width - w;
+  const bottom = workArea.y + workArea.height - h;
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  return {
+    x: tab ? right : clamp(position?.x ?? right - inset, workArea.x, right),
+    y: clamp(position?.y ?? workArea.y + (tab ? 26 : inset), workArea.y, bottom),
     width: w,
     height: h,
+  };
+}
+
+function placeWindow() {
+  const fallback = window.isVisible()
+    ? screen.getDisplayMatching(window.getBounds())
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const position = positions[shownView];
+  const display = screen.getAllDisplays().find(item => item.id === position?.displayId) ?? fallback;
+  window.setBounds(boundsFor(shownView, display, position));
+}
+
+function handleDrag(action, dx, dy) {
+  if (action === 'end') {
+    if (!drag) return;
+    drag = undefined;
+    presentActivity();
+    return;
+  }
+  if (shownView !== 'tab' && shownView !== 'compact') return;
+  if (action === 'start') {
+    const bounds = window.getBounds();
+    drag = { view: shownView, x: bounds.x, y: bounds.y, displayId: screen.getDisplayMatching(bounds).id };
+    return;
+  }
+  if (action !== 'move' || !drag || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+  const display = shownView === 'tab'
+    ? screen.getAllDisplays().find(item => item.id === drag.displayId) ?? screen.getDisplayMatching(window.getBounds())
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const bounds = boundsFor(shownView, display, {
+    x: drag.x + Math.round(dx),
+    y: drag.y + Math.round(dy),
   });
+  positions[shownView] = { x: bounds.x, y: bounds.y, displayId: display.id };
+  window.setBounds(bounds);
 }
 
 function selectView(view) {
@@ -116,10 +141,11 @@ function publish(value) {
 
 function presentActivity() {
   const session = demoStart ? preview(demoStart, Date.now()) : paused ? undefined : liveValue;
-  const view = selectedView ?? (session ? 'compact' : 'tab');
+  const view = selectedView ?? drag?.view ?? (session ? 'compact' : 'tab');
   const value = session ?? (!paused && view === 'fullscreen' && lastLive?.endedAt ? lastLive
     : { ...snapshot(), outcome: paused ? 'Paused' : 'Ready' });
   if (shownView !== view) {
+    drag = undefined;
     shownView = view;
     const fullscreen = view === 'fullscreen';
     window.setFocusable(fullscreen);
@@ -212,6 +238,9 @@ async function initialize() {
     if (event.sender !== window.webContents || !['tab', 'compact', 'fullscreen'].includes(view)) return;
     selectView(view);
   });
+  ipcMain.on('map-drag', (event, action, dx, dy) => {
+    if (event.sender === window.webContents) handleDrag(action, dx, dy);
+  });
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
     const cycle = input.key === 'Tab' && input.control && !input.shift && !input.alt && !input.meta;
@@ -224,9 +253,10 @@ async function initialize() {
   await window.loadFile(path.join(__dirname, 'index.html'));
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'tray.png')));
   tray.setToolTip('Map Live for Codex');
-  tray.on('double-click', togglePreview);
+  tray.on('click', () => selectView('compact'));
   for (const request of pendingRequests.splice(0)) handleLaunch(request);
   screen.on('display-metrics-changed', () => { if (window.isVisible()) placeWindow(); });
+  screen.on('display-removed', () => { if (window.isVisible()) placeWindow(); });
   await refresh();
   timer = setInterval(refresh, 425);
   if (capturePath) setTimeout(() => app.exit(2), 10_000).unref();
