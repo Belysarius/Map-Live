@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self';">
+  <title>Map Live</title>
+  <link rel="stylesheet" href="overlay.css">
+  <script defer src="../dist/renderer.js"></script>
+</head>
+<body>
+  <button type="button" class="edge-tab" id="edge-tab" title="Open Map Live (Ctrl+Tab)" aria-label="Open Map Live" hidden>
+    <img src="tray.png" alt="">
+    <span>Map Live</span>
+    <i aria-hidden="true"></i>
+  </button>
+  <main class="hud" id="hud" aria-label="Codex live activity" hidden>
+    <header class="header">
+      <div class="brand">
+        <img src="tray.png" alt="">
+        <h1>Map Live</h1>
+      </div>
+      <div class="header-controls">
+        <div class="signal" id="signal"><i></i><span id="status"></span></div>
+        <button type="button" class="view-button" id="minimize" title="Minimize to tab" aria-label="Minimize to tab">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11h8"/></svg>
+        </button>
+        <button type="button" class="view-button" id="resize" title="Open fullscreen" aria-label="Open fullscreen">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path class="expand-icon" d="M6 3H3v3m7-3h3v3M3 10v3h3m7-3v3h-3"/>
+            <path class="restore-icon" d="M3 6h3V3m7 3h-3V3m-7 7h3v3m7-3h-3v3"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <section class="radar" aria-label="Activity map">
+      <div class="radar-grid"></div>
+      <div class="radar-sweep"></div>
+      <div class="map" id="map"></div>
+    </section>
+    <section class="activity" aria-labelledby="feed-title">
+      <div class="feed-head">
+        <h2 id="feed-title">Activity feed</h2>
+        <span id="count"></span>
+      </div>
+      <ol class="feed" id="feed"></ol>
+    </section>
+    <footer class="footer">
+      <span id="source"></span>
+      <span class="fullscreen-hint">Ctrl+Tab to minimize · Esc for compact</span>
+      <span id="elapsed"></span>
+    </footer>
+  </main>
+</body>
+</html>
