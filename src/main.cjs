@@ -1,10 +1,17 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Tray, nativeImage, screen } = require('electron');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { ActivityReader, snapshot } = require('./activity.cjs');
 const { preview } = require('./demo.cjs');
 
+const isWindows = process.platform === 'win32';
+const isMac = process.platform === 'darwin';
+const isLinux = process.platform === 'linux';
+const ozone = app.commandLine.getSwitchValue('ozone-platform');
+const nativeWayland = isLinux && (ozone === 'wayland' ||
+  (ozone !== 'x11' && (Boolean(process.env.WAYLAND_DISPLAY) || process.env.XDG_SESSION_TYPE === 'wayland')));
+const shortcut = 'Control+Alt+M';
 const width = 438;
 const height = 628;
 const tabWidth = 132;
@@ -25,6 +32,7 @@ let shownView;
 let demoStart = launchRequest.demo ? Date.now() - 9_900 : 0;
 let window;
 let tray;
+let ready = false;
 let liveValue;
 let lastLive;
 let lastTrayState;
@@ -34,7 +42,8 @@ let lastPayload;
 let lastError;
 let timer;
 let captureStarted = false;
-let drag;
+let tabDrag;
+let movingCompact = false;
 
 app.setName('Map Live');
 
@@ -57,6 +66,11 @@ function boundsFor(view, display, position) {
 }
 
 function placeWindow() {
+  if (nativeWayland) {
+    const fullscreen = shownView === 'fullscreen';
+    if (fullscreen !== window.isFullScreen()) window.setFullScreen(fullscreen);
+    return;
+  }
   const fallback = window.isVisible()
     ? screen.getDisplayMatching(window.getBounds())
     : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -65,46 +79,46 @@ function placeWindow() {
   window.setBounds(boundsFor(shownView, display, position));
 }
 
-function handleDrag(action, dx, dy) {
+function handleTabDrag(action, dy) {
   if (action === 'end') {
-    if (!drag) return;
-    drag = undefined;
+    if (!tabDrag) return;
+    tabDrag = undefined;
     presentActivity();
     return;
   }
-  if (shownView !== 'tab' && shownView !== 'compact') return;
+  if (shownView !== 'tab') return;
   if (action === 'start') {
     const bounds = window.getBounds();
-    drag = { view: shownView, x: bounds.x, y: bounds.y, displayId: screen.getDisplayMatching(bounds).id };
+    tabDrag = { y: bounds.y, displayId: screen.getDisplayMatching(bounds).id };
     return;
   }
-  if (action !== 'move' || !drag || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
-  const display = shownView === 'tab'
-    ? screen.getAllDisplays().find(item => item.id === drag.displayId) ?? screen.getDisplayMatching(window.getBounds())
-    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const bounds = boundsFor(shownView, display, {
-    x: drag.x + Math.round(dx),
-    y: drag.y + Math.round(dy),
-  });
-  positions[shownView] = { x: bounds.x, y: bounds.y, displayId: display.id };
+  if (action !== 'move' || !tabDrag || !Number.isFinite(dy)) return;
+  const display = screen.getAllDisplays().find(item => item.id === tabDrag.displayId)
+    ?? screen.getDisplayMatching(window.getBounds());
+  const bounds = boundsFor('tab', display, { y: tabDrag.y + Math.round(dy) });
+  positions.tab = { y: bounds.y, displayId: display.id };
   window.setBounds(bounds);
 }
 
 function selectView(view) {
-  selectedView = view;
+  selectedView = nativeWayland && view === 'tab' ? 'compact' : view;
   presentActivity();
 }
 
 function cycleView() {
+  if (nativeWayland) {
+    selectView(shownView === 'fullscreen' ? 'compact' : 'fullscreen');
+    return;
+  }
   const view = shownView ?? 'tab';
   selectView(view === 'tab' ? 'compact' : view === 'compact' ? 'fullscreen' : 'tab');
 }
 
 function handleLaunch(request) {
-  if (request.notice) selectedView = undefined;
   if (request.demo && !demoStart) togglePreview();
   if (request.fullscreen) selectView('fullscreen');
   if (request.cycle) cycleView();
+  else if (request.notice) void refresh();
   else presentActivity();
 }
 
@@ -114,11 +128,11 @@ function togglePreview() {
   presentActivity();
 }
 
-function updateTray() {
-  tray.setContextMenu(Menu.buildFromTemplate([
+function viewMenu() {
+  return Menu.buildFromTemplate([
     { label: 'Map Live', enabled: false },
     { type: 'separator' },
-    { label: 'Minimize to tab', click: () => selectView('tab'), enabled: shownView !== 'tab' },
+    ...(!nativeWayland ? [{ label: 'Minimize to tab', click: () => selectView('tab'), enabled: shownView !== 'tab' }] : []),
     { label: 'Open compact window', click: () => selectView('compact'), enabled: shownView !== 'compact' },
     { label: 'Open fullscreen', click: () => selectView('fullscreen'), enabled: shownView !== 'fullscreen' },
     { label: 'Follow activity automatically', type: 'checkbox', checked: !selectedView, click: () => selectView() },
@@ -127,9 +141,26 @@ function updateTray() {
       label: 'Pause live overlay', type: 'checkbox', checked: paused,
       click(item) { paused = item.checked; presentActivity(); },
     },
+    ...(!isWindows ? [{
+      label: `Global shortcut (${isMac ? 'Control+Option+M' : 'Ctrl+Alt+M'})`,
+      type: 'checkbox',
+      checked: globalShortcut.isRegistered(shortcut),
+      click(item) {
+        if (item.checked) {
+          if (!globalShortcut.register(shortcut, cycleView)) {
+            console.warn('Map Live: the global shortcut is unavailable.');
+          }
+        } else globalShortcut.unregister(shortcut);
+        updateTray();
+      },
+    }] : []),
     { type: 'separator' },
     { label: 'Quit Map Live', click: () => app.quit() },
-  ]));
+  ]);
+}
+
+function updateTray() {
+  if (tray) tray.setContextMenu(viewMenu());
 }
 
 function publish(value) {
@@ -141,41 +172,45 @@ function publish(value) {
 
 function presentActivity() {
   const session = demoStart ? preview(demoStart, Date.now()) : paused ? undefined : liveValue;
-  const view = selectedView ?? drag?.view ?? (session ? 'compact' : 'tab');
+  const view = selectedView ?? (nativeWayland || (!tabDrag && session) ? 'compact' : 'tab');
   const value = session ?? (!paused && view === 'fullscreen' && lastLive?.endedAt ? lastLive
     : { ...snapshot(), outcome: paused ? 'Paused' : 'Ready' });
   if (shownView !== view) {
-    drag = undefined;
+    tabDrag = undefined;
+    movingCompact = false;
     shownView = view;
     const fullscreen = view === 'fullscreen';
-    window.setFocusable(fullscreen);
-    if (!fullscreen && window.isFocused()) window.blur();
+    if (isWindows) {
+      window.setFocusable(fullscreen);
+      if (!fullscreen && window.isFocused()) window.blur();
+    }
     placeWindow();
     if (!window.isVisible()) {
-      if (fullscreen) window.show();
+      if (fullscreen || nativeWayland) window.show();
       else window.showInactive();
-    } else if (fullscreen) window.focus();
-    window.setAlwaysOnTop(true, 'pop-up-menu');
+    } else if (fullscreen && !nativeWayland) window.focus();
+    if (!nativeWayland) window.setAlwaysOnTop(true, isWindows ? 'pop-up-menu' : 'floating');
   }
   const trayState = [shownView, selectedView, Boolean(demoStart), paused].join('/');
   if (trayState !== lastTrayState) {
     lastTrayState = trayState;
     updateTray();
   }
-  publish({ ...value, view });
+  publish({ ...value, view, canMinimizeToTab: !nativeWayland });
 }
 
 async function capture() {
   if (captureStarted || !capturePath) return;
   captureStarted = true;
   await new Promise(resolve => setTimeout(resolve, 680));
-  if (!window.isVisible() || !window.isAlwaysOnTop() || (shownView !== 'fullscreen' && window.isFocused())) {
+  if (!window.isVisible() || (!nativeWayland && !window.isAlwaysOnTop()) ||
+      (isWindows && shownView !== 'fullscreen' && window.isFocused())) {
     throw new Error(`Unexpected window state: visible=${window.isVisible()}, topmost=${window.isAlwaysOnTop()}, focused=${window.isFocused()}`);
   }
   const selector = shownView === 'tab' ? '#edge-tab:not([hidden])' : '.hud:not([hidden]) #map svg';
   const rendered = await window.webContents.executeJavaScript(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
   if (!rendered) throw new Error('Overlay did not render the requested view.');
-  if (shownView === 'fullscreen') {
+  if (shownView === 'fullscreen' && !nativeWayland) {
     const { width, height } = screen.getDisplayMatching(window.getBounds()).bounds;
     const actual = window.getBounds();
     if (actual.width !== width || actual.height !== height) throw new Error('Fullscreen overlay does not fill the display.');
@@ -213,17 +248,17 @@ async function initialize() {
     width,
     height,
     show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    frame: nativeWayland,
+    transparent: !nativeWayland,
+    backgroundColor: nativeWayland ? '#061522' : '#00000000',
     hasShadow: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    focusable: selectedView === 'fullscreen',
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
+    alwaysOnTop: !nativeWayland,
+    skipTaskbar: isWindows,
+    focusable: !isWindows || selectedView === 'fullscreen',
+    resizable: nativeWayland,
+    minimizable: nativeWayland,
+    maximizable: nativeWayland,
+    fullscreenable: nativeWayland,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       sandbox: true,
@@ -238,9 +273,44 @@ async function initialize() {
     if (event.sender !== window.webContents || !['tab', 'compact', 'fullscreen'].includes(view)) return;
     selectView(view);
   });
-  ipcMain.on('map-drag', (event, action, dx, dy) => {
-    if (event.sender === window.webContents) handleDrag(action, dx, dy);
+  ipcMain.on('map-tab-drag', (event, action, dy) => {
+    if (event.sender === window.webContents) handleTabDrag(action, dy);
   });
+  window.on('will-move', (event) => {
+    if (shownView !== 'compact') {
+      event.preventDefault();
+      return;
+    }
+    movingCompact = true;
+    selectedView = 'compact';
+  });
+  window.on('moved', () => {
+    if (!movingCompact || shownView !== 'compact') return;
+    movingCompact = false;
+    const bounds = window.getBounds();
+    const display = screen.getDisplayMatching(bounds);
+    const position = boundsFor('compact', display, bounds);
+    positions.compact = { x: position.x, y: position.y, displayId: display.id };
+    if (position.x !== bounds.x || position.y !== bounds.y ||
+        position.width !== bounds.width || position.height !== bounds.height) window.setBounds(position);
+    presentActivity();
+  });
+  if (isLinux && !nativeWayland) {
+    window.on('move', () => {
+      if (shownView !== 'compact') return;
+      const bounds = window.getBounds();
+      const display = screen.getDisplayMatching(bounds);
+      positions.compact = { x: bounds.x, y: bounds.y, displayId: display.id };
+    });
+  }
+  if (nativeWayland) {
+    window.on('leave-full-screen', () => {
+      if (shownView === 'fullscreen') selectView('compact');
+    });
+  }
+  if (!isWindows) {
+    window.webContents.on('context-menu', () => viewMenu().popup({ window }));
+  }
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
     const cycle = input.key === 'Tab' && input.control && !input.shift && !input.alt && !input.meta;
@@ -251,11 +321,18 @@ async function initialize() {
     else selectView('compact');
   });
   await window.loadFile(path.join(__dirname, 'index.html'));
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'tray.png')));
-  tray.setToolTip('Map Live for Codex');
-  tray.on('click', () => selectView('compact'));
+  try {
+    const image = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
+    tray = new Tray(isMac ? image.resize({ width: 18, height: 18 }) : image);
+    tray.setToolTip('Map Live for Codex');
+    tray.on('click', () => selectView('compact'));
+  } catch (error) {
+    if (isWindows) throw error;
+    console.warn('Map Live: the tray icon is unavailable. Right-click the overlay for its menu.');
+  }
+  ready = true;
   for (const request of pendingRequests.splice(0)) handleLaunch(request);
-  screen.on('display-metrics-changed', () => { if (window.isVisible()) placeWindow(); });
+  screen.on('display-metrics-changed', () => { if (window.isVisible() && !movingCompact) placeWindow(); });
   screen.on('display-removed', () => { if (window.isVisible()) placeWindow(); });
   await refresh();
   timer = setInterval(refresh, 425);
@@ -266,10 +343,14 @@ if (!capturePath && !app.requestSingleInstanceLock(launchRequest)) {
   app.quit();
 } else {
   app.on('second-instance', (_event, _args, _directory, request) => {
-    if (tray) handleLaunch(request);
+    if (ready) {
+      handleLaunch(request);
+      if (nativeWayland && window.isMinimized()) window.restore();
+    }
     else pendingRequests.push(request);
   });
   app.on('before-quit', () => clearInterval(timer));
+  app.on('will-quit', () => { if (!isWindows) globalShortcut.unregisterAll(); });
   app.whenReady().then(initialize).catch(error => {
     console.error('Map Live:', error.message);
     app.exit(1);

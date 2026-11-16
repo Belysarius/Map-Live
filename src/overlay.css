@@ -76,9 +76,8 @@ body { margin: 0; overflow: hidden; user-select: none; }
   background: linear-gradient(90deg, #7bd7ff0c, transparent);
 }
 .brand { align-self: stretch; flex: 1; gap: 9px; }
-.hud:not(.fullscreen) .brand { cursor: grab; touch-action: none; }
-.hud:not(.fullscreen) .brand.dragging { cursor: grabbing; }
-.header-controls { gap: 6px; }
+.hud:not(.fullscreen) .brand { app-region: drag; }
+.header-controls { gap: 6px; app-region: no-drag; }
 .header-controls .signal { margin-right: 4px; }
 .view-button {
   display: grid;

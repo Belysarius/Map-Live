@@ -12,6 +12,7 @@ type Activity = {
   endedAt: number;
   outcome: string;
   view: View;
+  canMinimizeToTab: boolean;
   board: Board;
 };
 
@@ -20,7 +21,7 @@ declare global {
     mapLive: {
       onActivity(callback: (activity: Activity) => void): void;
       selectView(view: View): void;
-      drag(action: DragAction, dx?: number, dy?: number): void;
+      dragTab(action: DragAction, dy?: number): void;
     };
   }
 }
@@ -46,9 +47,9 @@ function element(id: string): HTMLElement {
 
 const hud = element('hud');
 const edgeTab = element('edge-tab');
-const compactDragHandle = element('compact-drag-handle');
 const minimize = element('minimize');
 const resize = element('resize');
+const fullscreenHint = element('fullscreen-hint');
 const map = element('map');
 const signal = element('signal');
 const status = element('status');
@@ -98,6 +99,10 @@ function render(activity: Activity) {
   edgeTab.dataset.active = String(activity.active);
   hud.hidden = tab;
   hud.classList.toggle('fullscreen', fullscreen);
+  minimize.hidden = !activity.canMinimizeToTab;
+  fullscreenHint.textContent = activity.canMinimizeToTab
+    ? 'Ctrl+Tab to minimize · Esc for compact'
+    : 'Ctrl+Tab or Esc for compact';
   if (tab) return;
 
   resize.title = fullscreen ? 'Restore compact window' : 'Open fullscreen';
@@ -119,20 +124,20 @@ function render(activity: Activity) {
   updateClock();
 }
 
-function enableDrag(handle: HTMLElement, view: 'tab' | 'compact', onClick?: () => void) {
+function enableTabDrag() {
   let gesture: { id: number; x: number; y: number; moved: boolean } | undefined;
   let suppressClick = false;
 
-  handle.addEventListener('pointerdown', event => {
-    if (current?.view !== view || event.button !== 0 || !event.isPrimary) return;
+  edgeTab.addEventListener('pointerdown', event => {
+    if (current?.view !== 'tab' || event.button !== 0 || !event.isPrimary) return;
     suppressClick = false;
     gesture = { id: event.pointerId, x: event.screenX, y: event.screenY, moved: false };
-    if (view === 'compact') handle.setPointerCapture(event.pointerId);
-    window.mapLive.drag('start');
+    edgeTab.setPointerCapture(event.pointerId);
+    window.mapLive.dragTab('start');
   });
 
   function move(event: PointerEvent) {
-    if (!gesture || gesture.id !== event.pointerId || current?.view !== view) return;
+    if (!gesture || gesture.id !== event.pointerId || current?.view !== 'tab') return;
     if (event.type === 'pointermove' && event.buttons === 0) {
       end(event);
       return;
@@ -143,33 +148,31 @@ function enableDrag(handle: HTMLElement, view: 'tab' | 'compact', onClick?: () =
       if (Math.hypot(dx, dy) < 4) return;
       gesture.moved = true;
       suppressClick = true;
-      if (view === 'tab' && event.type === 'pointermove') handle.setPointerCapture(event.pointerId);
-      handle.classList.add('dragging');
+      edgeTab.classList.add('dragging');
     }
-    window.mapLive.drag('move', dx, dy);
+    window.mapLive.dragTab('move', dy);
   }
 
   function end(event: PointerEvent) {
     if (!gesture || gesture.id !== event.pointerId) return;
     if (event.type === 'pointerup') move(event);
     gesture = undefined;
-    handle.classList.remove('dragging');
-    window.mapLive.drag('end');
+    edgeTab.classList.remove('dragging');
+    window.mapLive.dragTab('end');
   }
 
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', end);
   document.addEventListener('pointercancel', end);
-  handle.addEventListener('lostpointercapture', end);
-  if (onClick) handle.addEventListener('click', event => {
-    if (!suppressClick || event.detail === 0) onClick();
+  edgeTab.addEventListener('lostpointercapture', end);
+  edgeTab.addEventListener('click', event => {
+    if (!suppressClick || event.detail === 0) window.mapLive.selectView('compact');
     suppressClick = false;
   });
 }
 
 motion.addEventListener('change', () => { if (current && !hud.hidden) render(current); });
-enableDrag(edgeTab, 'tab', () => window.mapLive.selectView('compact'));
-enableDrag(compactDragHandle, 'compact');
+enableTabDrag();
 minimize.addEventListener('click', () => window.mapLive.selectView('tab'));
 resize.addEventListener('click', () => window.mapLive.selectView(current?.view === 'fullscreen' ? 'compact' : 'fullscreen'));
 window.mapLive.onActivity(render);

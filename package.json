@@ -2,14 +2,14 @@
   "name": "map-live",
   "version": "0.1.0",
   "private": true,
-  "description": "A live Windows overlay for local Codex activity",
+  "description": "A live desktop overlay for local Codex activity",
   "main": "src/main.cjs",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "setup": "install-electron && npm run build",
     "build": "esbuild src/renderer.ts --bundle --outfile=dist/renderer.js && node scripts/build-companion.cjs",
-    "start": "npm run build && electron .",
-    "demo": "npm run build && electron . --demo",
+    "start": "npm run build && node scripts/launch.cjs",
+    "demo": "npm run build && node scripts/launch.cjs --demo",
     "test": "node --test"
   },
   "devDependencies": {
