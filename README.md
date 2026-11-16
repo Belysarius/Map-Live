@@ -23,7 +23,7 @@ Press **Ctrl+Tab** in Codex to cycle through the edge tab, compact window, and f
 
 ## Activity source
 
-Map Live tails today's and yesterday's local Codex session rollouts under `%USERPROFILE%\.codex\sessions` (or `%CODEX_HOME%\sessions`). The reader displays event categories and generic labels from those files. Prompts, answers, command lines, and tool output stay out of the window. Map Live sends no traffic and does not change Codex settings. Activity depends on the locally recorded events and their format.
+Map Live tails local Codex session rollouts under `%USERPROFILE%\.codex\sessions` (or `%CODEX_HOME%\sessions`). It checks older rollouts for activity when you resume a chat. The reader displays event categories and generic labels from those files. Prompts, answers, command lines, and tool output stay out of the window. Map Live sends no traffic and does not change Codex settings. Activity depends on the locally recorded events and their format.
 
 Run `npm test` to check the reader.
 

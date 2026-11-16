@@ -6,6 +6,7 @@ const HISTORY_BYTES = 2 * 1024 * 1024;
 const CHUNK_BYTES = 128 * 1024;
 const ACTIVE_WINDOW = 45 * 60_000;
 const FADE_DELAY = 4_000;
+const HISTORY_SCAN_INTERVAL = 2_000;
 
 const toolKinds = [
   [/spawn_agent|send_message|followup_task|wait_agent|interrupt_agent|collab|subagent/i, 'agents', 'Agent activity'],
@@ -182,22 +183,23 @@ function dateDirectory(base, date) {
   return path.join(base, String(date.getFullYear()), part(date.getMonth() + 1), part(date.getDate()));
 }
 
-async function listRollouts(base, now) {
+async function listRollouts(directory, recursive = false) {
+  try {
+    const files = await fs.readdir(directory, { withFileTypes: true, recursive });
+    return files
+      .filter(file => file.isFile() && /^rollout-.+\.jsonl$/.test(file.name))
+      .map(file => path.join(file.parentPath ?? file.path, file.name));
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function listRecentDirectories(base, now) {
   const today = new Date(now);
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
-  const results = await Promise.all([today, yesterday].map(async date => {
-    const directory = dateDirectory(base, date);
-    try {
-      const files = await fs.readdir(directory, { withFileTypes: true });
-      return files
-        .filter(file => file.isFile() && /^rollout-.+\.jsonl$/.test(file.name))
-        .map(file => path.join(directory, file.name));
-    } catch (error) {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    }
-  }));
+  const results = await Promise.all([today, yesterday].map(date => listRollouts(dateDirectory(base, date))));
   return results.flat();
 }
 
@@ -215,14 +217,18 @@ class ActivityReader {
   constructor(base) {
     this.base = base;
     this.sessions = new Map();
+    this.nextHistoryScan = -Infinity;
   }
 
   async poll(now = Date.now()) {
-    const files = new Set(await listRollouts(this.base, now));
+    // Resumed chats append to their original rollout, regardless of its folder date.
+    const scanHistory = now >= this.nextHistoryScan;
+    const files = new Set(await (scanHistory ? listRollouts(this.base, true) : listRecentDirectories(this.base, now)));
+    if (scanHistory) this.nextHistoryScan = now + HISTORY_SCAN_INTERVAL;
     for (const [file, session] of this.sessions) {
       if (files.has(file)) continue;
-      if (session.active && now - session.lastActivity < ACTIVE_WINDOW) files.add(file);
-      else this.sessions.delete(file);
+      if (scanHistory) this.sessions.delete(file);
+      else if (session.active && now - session.lastActivity < ACTIVE_WINDOW) files.add(file);
     }
     await Promise.all([...files].map(async file => {
       try {
