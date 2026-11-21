@@ -221,20 +221,30 @@ async function capture() {
   app.quit();
 }
 
+function updateLive(session) {
+  if (window.isDestroyed()) return;
+  liveValue = session ? snapshot(session) : undefined;
+  if (liveValue) lastLive = liveValue;
+  presentActivity();
+}
+
 async function refresh() {
   if (polling || !window || window.isDestroyed()) return;
   polling = true;
   try {
     const now = Date.now();
-    const live = demoStart || paused ? undefined : await reader.poll(now);
+    let failure;
+    // A log that cannot be read still leaves the activity read from the others on screen.
+    const live = demoStart || paused ? undefined : await reader.poll(now, updateLive).catch(error => {
+      failure = error;
+      return error.session;
+    });
     if (window.isDestroyed()) return;
-    liveValue = live ? snapshot(live) : undefined;
-    if (liveValue) lastLive = liveValue;
-    presentActivity();
+    updateLive(live);
+    if (failure) throw failure;
     await capture();
     lastError = undefined;
   } catch (error) {
-    liveValue = undefined;
     if (lastError !== error.message) console.error('Map Live:', error.message);
     lastError = error.message;
     if (capturePath) app.exit(1);
@@ -334,6 +344,7 @@ async function initialize() {
   for (const request of pendingRequests.splice(0)) handleLaunch(request);
   screen.on('display-metrics-changed', () => { if (window.isVisible() && !movingCompact) placeWindow(); });
   screen.on('display-removed', () => { if (window.isVisible()) placeWindow(); });
+  presentActivity();
   await refresh();
   timer = setInterval(refresh, 425);
   if (capturePath) setTimeout(() => app.exit(2), 10_000).unref();

@@ -79,6 +79,8 @@ The feed puts running calls first and shows the most recent finished events belo
 
 Map Live reads local Codex session logs under `~/.codex/sessions`, or the `sessions` directory inside `CODEX_HOME` if set. When you resume a chat, it also checks logs from older dates. The map reflects the events Codex records in those files.
 
+Map Live reads up to eight logs at a time and uses at most the last 2 MiB of each log to recover existing activity. On macOS and Linux, if a log's modification and change times are both outside the 45-minute activity window, Map Live defers reading it until it grows. On Windows, Map Live reads the tail of every log it has not seen before, because timestamps may stay stale while Codex is writing. The overlay opens while the first scan runs. Today's and yesterday's logs are read first, so their activity can appear before the scan finishes; it refreshes when the scan finishes. If a log cannot be read, Map Live reports the error and keeps showing activity from the other logs.
+
 The overlay displays event categories and generic labels. Prompts, answers, command lines, and tool output stay out of the overlay. Map Live sends no activity data over the network and does not change Codex settings.
 
 Run `npm test` to check the log reader.
